@@ -1,70 +1,30 @@
-#!/bin/sh
+#!/bin/bash
 set -eu
+LOG="$1"; TOP_N="${2:-30}"
 
-log=${1:-}
-[ -n "$log" ] && [ -f "$log" ] || { echo "usage: $0 <net.selftests.log>" >&2; exit 1; }
+normalize_test() {
+    sed -E 's/^[0-9]+://; s/\[[0-9]+\]//g; s/[0-9-]{10}//g; s/^[[:space:]]*//' | sort -u
+}
 
-# treat "[EXIT] ... 4" as SKIP (KSFT_SKIP)
-EXIT_REAL=$(grep -c '^\[EXIT\]' "$log" || true)
-EXIT_SKIP=$(grep -c '^\[EXIT\].*[[:space:]]4$' "$log" || true)
-EXIT=$((EXIT_REAL - EXIT_SKIP))
+# 1. 脚本统计
+P=$(grep -c "\[PASS\]" "$LOG" || true)
+F=$(grep -c "\[FAIL\]" "$LOG" || true)
+S=$(grep -c "\[SKIP\]" "$LOG" || true)
 
-PASS=$(grep -c '^\[PASS\]' "$log" || true)
-FAIL=$(grep -c '^FAIL:\|^\[FAIL\]' "$log" || true)
-SKIP=$(grep -c '\[SKIP\]' "$log" || true)
-SKIP=$((SKIP + EXIT_SKIP))
-XFAIL=$(grep -c '\[XFAIL\]' "$log" || true)
+# 2. 子测试统计 (基于 TAP)
+SP=$(grep -E "^ok [0-9]+" "$LOG" | grep -v "# SKIP" | wc -l || true)
+SS=$(grep -E "^ok [0-9]+ # SKIP" "$LOG" | wc -l || true)
+SF=$(grep -E "^not ok [0-9]+" "$LOG" | wc -l || true)
 
 echo "==== net kselftest summary ===="
-echo "PASS  : $PASS"
-echo "FAIL  : $FAIL"
-echo "SKIP  : $SKIP"
-echo "XFAIL : $XFAIL"
-echo "EXIT  : $EXIT"
+echo "Scripts:   PASS=$P, FAIL=$F, SKIP=$S"
+echo "Sub-tests: PASS=$SP, FAIL=$SF, SKIP=$SS"
 
-echo
-echo "==== FAIL / EXIT details (classified) ===="
+echo -e "\n## Top Failures ##"
+FAIL_LIST=$(grep -E "\[FAIL\]|\[EXIT\]|^not ok" "$LOG" | normalize_test)
+actual=$(echo "$FAIL_LIST" | grep -v "^$" | wc -l || echo 0)
+show=$(( actual < TOP_N ? actual : TOP_N ))
+echo "$FAIL_LIST" | head -n "$show"
 
-# show real EXIT only (exclude rc=4)
-grep -nE '^\[EXIT\]|^FAIL:' "$log" | while IFS= read -r line; do
-    case "$line" in
-        *"[EXIT]"*" 4")
-            echo "[SKIP] $line (KSFT_SKIP=4)"
-            ;;
-        *"Failed to turn on feature"*)
-            echo "[ENV:ethtool] $line"
-            ;;
-        *"Unknown device type"*|*"cannot add "*|*"can't add "*|*"routing not supported"*)
-            echo "[ENV:netdev] $line"
-            ;;
-        *"qdisc"*|*"htb"*|*"tc "*)
-            echo "[ENV:tc] $line"
-            ;;
-        *)
-            echo "[CHECK] $line"
-            ;;
-    esac
-done
-
-echo
-echo "==== PASS details (first 50) ===="
-grep -n '^\[PASS\]' "$log" | head -n 50 || true
-
-echo
-echo "==== FAIL details (first 50) ===="
-grep -nE '^FAIL:|^\[FAIL\]' "$log" | head -n 50 || true
-
-echo
-echo "==== SKIP details (first 50) ===="
-{
-  grep -n '\[SKIP\]' "$log" || true
-  grep -n '^\[EXIT\].*[[:space:]]4$' "$log" | sed 's/^\([0-9]*:\)/\1[SKIP] /' || true
-} | head -n 50 || true
-
-echo
-echo "==== EXIT details (first 50) ===="
-grep -n '^\[EXIT\]' "$log" | grep -v '[[:space:]]4$' | head -n 50 || true
-
-echo
-echo "==== verdict ===="
-echo "OK: failures are environment-related (virtme-ng expected)"
+# 导出标准化列表
+grep "\[" "$LOG" | normalize_test > .kselftest-out/list.test.txt
