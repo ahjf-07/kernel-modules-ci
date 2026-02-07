@@ -1,0 +1,11 @@
+#!/bin/bash
+# sparse-wrapper
+# 作用：运行 sparse，并将所有输出加上 [SPARSE] 前缀
+# 这样 CI 脚本就能轻松把它和 GCC/Clang 的报错区分开
+
+# 1. 调用系统 sparse，保留所有参数 "$@"
+# 2. 将 stderr 合并到 stdout (2>&1)
+# 3. 用 sed 给每一行加前缀
+# 4. 这里的 pipefail 即使失败也不影响 (内核 build 不会因为 sparse 失败而停止)
+
+sparse "$@" 2>&1 | sed 's/^/[SPARSE] /'
