@@ -1,43 +1,54 @@
 #!/bin/bash
-# [Refactored] build-net.sh
-# Supports: -o <out_dir>, -l (Clang), -g (GCC), -s (Sparse)
-set -eu
+# build-net.sh - 最终修正版：确保 sparse-wrapper 绝对路径调用正确
+set -e
 
 O_DIR=""
-COMPILER="gcc"  # 默认 GCC
+CC_FLAG="" 
 SPARSE=0
-J_VAL=$(nproc)
+CPUS=$(nproc)
 
-while getopts "o:lgsj:h" opt; do
-    case "$opt" in
-        o) O_DIR="$OPTARG" ;;
-        l) COMPILER="clang" ;;
-        g) COMPILER="gcc" ;;
-        s) SPARSE=1 ;;
-        j) J_VAL="$OPTARG" ;;
-        h) echo "Usage: $0 -o <dir> [-l|-g] [-s] [-j <nproc>]"; exit 0 ;;
-        *) echo "Unknown option: $opt"; exit 1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) O_DIR="$2"; shift 2 ;;
+        -l) CC_FLAG="LLVM=1"; shift ;;
+        -g) CC_FLAG=""; shift ;;
+        -s) SPARSE=1; shift ;;
+        -j*) CPUS="${1#-j}"; shift ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-[ -z "$O_DIR" ] && { echo "ERROR: -o <output_dir> is required"; exit 1; }
-
-# --- 构建 Make 命令 ---
-# 基础命令
-CMD="make O=$O_DIR -j$J_VAL"
-
-# 编译器适配
-if [ "$COMPILER" = "clang" ]; then
-    CMD="$CMD LLVM=1"
-    # 如果环境里没有导出 LLVM_IAS，这里也可以保险起见加一个
-    # CMD="$CMD LLVM_IAS=1"
+if [ -z "$O_DIR" ]; then 
+    echo "Usage: $0 -o <out_dir> [-l|-g] [-s] [-jN]"
+    exit 1
 fi
 
-# Sparse 适配
+# 1. 输出目录转绝对路径
+O_DIR_ABS=$(readlink -f "$O_DIR")
+
+# 2. 【修改点】获取 sj-ktools 的绝对路径
+# 不管你在哪运行，都能找到同目录下的 sparse-wrapper
+TOOL_DIR=$(dirname "$(readlink -f "$0")")
+WRAPPER="$TOOL_DIR/sparse-wrapper"
+
+echo "[build] Output Dir: $O_DIR_ABS"
+
+# 构造基础命令
+MAKE_CMD="make O=$O_DIR_ABS -j$CPUS $CC_FLAG"
+
+# 3. 启用 Sparse (使用绝对路径 wrapper)
 if [ "$SPARSE" -eq 1 ]; then
-    CMD="$CMD C=1"
+    if [ -x "$WRAPPER" ]; then
+        echo "[build] Sparse enabled using wrapper: $WRAPPER"
+        # 核心：CHECK 必须是绝对路径
+        MAKE_CMD="$MAKE_CMD C=1 CHECK=$WRAPPER"
+    else
+        echo "[WARN] Wrapper not found or not executable at: $WRAPPER"
+        echo "[WARN] Falling back to default 'sparse' command."
+        MAKE_CMD="$MAKE_CMD C=1 CHECK=sparse"
+    fi
 fi
 
-echo "[build] Executing: $CMD"
-# 执行编译 (eval 用于解析变量中的空格)
-eval "$CMD"
+echo "[build] Executing: $MAKE_CMD"
+$MAKE_CMD bzImage
+$MAKE_CMD modules

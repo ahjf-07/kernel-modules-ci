@@ -1,253 +1,301 @@
 #!/bin/bash
-# [Final Fixed] auto-net-ci.sh
-# Fixes: Timestamp stripping, Report Titles, Strict Normalization
+# ==============================================================================
+# Script Name: auto-net-ci.sh (V22 - Default Clang)
+# Description: Automated Kernel Build & Test CI for Networking
+# ==============================================================================
+
 set -eu
 set -o pipefail
 
-# --- 0. 安全检查 ---
-if [ ! -f "MAINTAINERS" ] || [ ! -f "Makefile" ] || ! grep -q "^VERSION =" Makefile; then
-    echo "Error: Current directory ($(pwd)) is NOT a Linux kernel source root."
-    exit 1
-fi
+# 强制 ASCII 排序，确保 diff 结果一致
+export LC_ALL=C
+export LANG=C
 
-# --- 1. 默认值 ---
+# ==============================================================================
+# [Step 1] Default Configuration
+# ==============================================================================
 TOOL_DIR="../sj-ktools"
-LINUX_ROOT=$(pwd)
 O_BASE="../out"
 
-COMPILER="gcc"
-GIT_BRANCH="master"
-UPDATE=1
+# --- 【核心改动：默认改为 Clang】 ---
+COMPILER="clang"
+CC_FLAG="-l"
+# ----------------------------------
+
+UPDATE=0
 BUILD_MODE="m"
 SPARSE=1
-TEST_SCOPE="full"
+TEST_SCOPE=""
 RESET_B=0
 TOP_N=30
-CPUS=8
-MEM=8G
+CPUS=$(nproc)
+MEM="8G"
 TO_EMAIL="${AUTO_EMAIL:-}"
+ARCH=$(uname -m)
 
+# ==============================================================================
+# [Step 2] Usage Documentation
+# ==============================================================================
 usage() {
     echo "Usage: $0 [options]"
-    echo "  -g / -l         Compiler: GCC (default) / Clang"
-    echo "  -U / -u         Git: Update (default) / Offline"
-    echo "  -m / -c / -i    Mode: mrproper / clean / incremental"
-    echo "  -s              Enable Sparse"
-    echo "  --full/--fast   Test Scope"
-    echo "  --reset-baseline Update baseline"
-    echo "  -P <cpus> -M <mem> VM Config"
-    echo "  -e <email>      Email"
+    echo ""
+    echo "Build Options:"
+    echo "  -g                  Use GCC compiler"
+    echo "  -l                  Use Clang/LLVM compiler (Default)"
+    echo "  -U                  Update source code (perform 'git pull --rebase')"
+    echo "  -u                  Offline mode (Skip git update)"
+    echo "  -m                  Make mrproper (Full clean build, Recommended)"
+    echo "  -c                  Make clean (Standard clean)"
+    echo "  -i                  Incremental build (Faster, but risky for config changes)"
+    echo "  -s                  Enable Sparse checking (Default: Enabled)"
+    echo ""
+    echo "Test Options:"
+    echo "  --full              Run full tests (Includes stress tests)"
+    echo "  --fast              Run fast tests (Skips fcnal-test)"
+    echo "  --ffast             Run super fast tests (Default)"
+    echo ""
+    echo "General Options:"
+    echo "  -e <email>          Send report to email"
+    echo "  -N <num>            Show top N warnings in report (Default: 30)"
+    echo "  -P <cpus>           VM CPUs (Default: $(nproc))"
+    echo "  -M <mem>            VM Memory (Default: 8G)"
+    echo "  -O <dir>            Output Base Directory"
+    echo "  --reset-baseline    Force update baseline"
+    echo "  -h                  Show this help message"
+    echo ""
     exit 0
 }
 
-# --- 2. 参数解析 ---
-SHORT_OPTS="hglUumcisN:b:O:P:M:e:t:"
+# 解析参数
+SHORT_OPTS="hglUumcisN:O:P:M:e:"
 LONG_OPTS="full,fast,ffast,reset-baseline,top:"
 PARSED_ARGS=$(getopt -o "$SHORT_OPTS" -l "$LONG_OPTS" -n "$0" -- "$@")
-if [ $? -ne 0 ]; then usage; fi
 eval set -- "$PARSED_ARGS"
 
 while true; do
     case "$1" in
-        -h) usage; shift ;;
-        -g) COMPILER="gcc"; shift ;;
-        -l) COMPILER="clang"; shift ;;
-        -b) GIT_BRANCH="$2"; shift 2 ;;
-        -O) O_BASE="$2"; shift 2 ;;
-        -U) UPDATE=1; shift ;;
-        -u|-N) UPDATE=0; shift ;;
-        -m) BUILD_MODE="m"; shift ;;
-        -c) BUILD_MODE="c"; shift ;;
-        -i) BUILD_MODE="i"; shift ;;
-        -s) SPARSE=1; shift ;;
-        --full) TEST_SCOPE="full"; shift ;;
-        --fast) TEST_SCOPE="fast"; shift ;;
-        --ffast) TEST_SCOPE="ffast"; shift ;;
-        --reset-baseline) RESET_B=1; shift ;;
-        -P) CPUS="$2"; shift 2 ;;
-        -M) MEM="$2"; shift 2 ;;
-        -e) TO_EMAIL="$2"; shift 2 ;;
-        --top| -t) TOP_N="$2"; shift 2 ;;
-        --) shift; break ;;
-        *) echo "Internal error: $1"; exit 1 ;;
+        -h) usage ;;
+        -g) COMPILER="gcc" ; CC_FLAG="-g" ; shift ;;
+        -l) COMPILER="clang" ; CC_FLAG="-l" ; shift ;;
+        -U) UPDATE=1 ; shift ;;
+        -u) UPDATE=0 ; shift ;;
+        -m) BUILD_MODE="m" ; shift ;;
+        -c) BUILD_MODE="c" ; shift ;;
+        -i) BUILD_MODE="i" ; shift ;;
+        -s) SPARSE=1 ; shift ;;
+        -P) CPUS="$2" ; shift 2 ;;
+        -M) MEM="$2" ; shift 2 ;;
+        -N|--top) TOP_N="$2" ; shift 2 ;;
+        -O) O_BASE="$2" ; shift 2 ;;
+        -e) TO_EMAIL="$2" ; shift 2 ;;
+        --full|--fast|--ffast) TEST_SCOPE="$1" ; shift ;;
+        --reset-baseline) RESET_B=1 ; shift ;;
+        --) shift ; break ;;
     esac
 done
 
-# --- 3. 环境准备 ---
-ARCH=$(uname -m)
-[ "$ARCH" = "aarch64" ] && KARCH="arm64" || KARCH="$ARCH"
-
-if [ "$COMPILER" = "clang" ]; then
-    O_NAME="full-clang-${KARCH}"
-    STATE_NAME="${KARCH}.clang"
-    export LLVM=1; export LLVM_IAS=1
-else
-    O_NAME="full-gcc-${KARCH}"
-    STATE_NAME="${KARCH}.gcc"
-    unset LLVM LLVM_IAS
-fi
-
-O="${O_BASE}/${O_NAME}"
-STATE_DIR="${O_BASE}/auto-net-state/${STATE_NAME}"
-mkdir -p "$O" "$STATE_DIR/baseline" "$STATE_DIR/prev"
-
-# --- 4. Git 逻辑 ---
+# ==============================================================================
+# [Step 3] Environment & Git
+# ==============================================================================
 if [ "$UPDATE" -eq 1 ]; then
-    echo "[git] Updating from upstream ($GIT_BRANCH)..."
-    git fetch upstream
-    git checkout "$GIT_BRANCH"
-    git pull --ff-only upstream "$GIT_BRANCH"
+    echo "[git] Pulling updates..."
+    git pull --rebase || echo "[WARN] Git pull failed"
 fi
-new_ref=$(git rev-parse HEAD)
-NOW=$(date +%Y%m%dT%H%M%SZ); RUN_DIR="$STATE_DIR/runs/$NOW"; mkdir -p "$RUN_DIR"
 
-# --- 5. 编译流水线 ---
-echo "==== Step 1: Config ($COMPILER) ===="
-[ "$COMPILER" = "clang" ] && CFG_COMP="-l" || CFG_COMP="-g"
-"$TOOL_DIR/config-net.sh" -o "$O" -"$BUILD_MODE" "$CFG_COMP"
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_SUBJECT=$(git log -1 --format=%s 2>/dev/null || echo "unknown")
 
-echo "==== Step 2: Build ===="
-BUILD_ARGS="-o $O -j$(nproc)"
-[ "$COMPILER" = "clang" ] && BUILD_ARGS="$BUILD_ARGS -l" || BUILD_ARGS="$BUILD_ARGS -g"
-[ "$SPARSE" -eq 1 ] && BUILD_ARGS="$BUILD_ARGS -s"
-"$TOOL_DIR/build-net.sh" $BUILD_ARGS |& tee "$RUN_DIR/build.all.log"
+TIMESTAMP=$(date +%Y%m%dT%H%M%SZ)
+RUN_TAG="${ARCH}.${COMPILER}.net"
+STATE_DIR=$(readlink -f "$O_BASE/auto-net-state/$RUN_TAG")
+RUN_DIR="$STATE_DIR/runs/$TIMESTAMP"
+BASELINE_DIR="$STATE_DIR/baseline"
+PREV_DIR="$STATE_DIR/prev"
+LATEST_LINK="$STATE_DIR/latest"
 
-echo "==== Step 3: Scan ===="
-"$TOOL_DIR/scan-net.sh" -t "$TOP_N" "$RUN_DIR/build.all.log" > "$RUN_DIR/build.summ.txt"
+mkdir -p "$RUN_DIR" "$BASELINE_DIR" "$PREV_DIR"
+O_DIR="$O_BASE/build/$RUN_TAG"
 
-echo "==== Step 4: Test ($TEST_SCOPE) ===="
-rm -f .kselftest-out/net.selftests.log
-"$TOOL_DIR/run-net.sh" -o "$O" -p "$CPUS" -m "$MEM" -S "$TEST_SCOPE" |& tee "$RUN_DIR/run-net.host.log"
+# ==============================================================================
+# [Step 4] Helpers (Normalization & Diffing)
+# ==============================================================================
+NOISE_FILTER="bad integer|embedded NUL|unrecognized command|attribute directive|static assertion|context imbalance|incompatible types|too long token|Should it be static|was not declared|redeclared with different type|memset with byte count|shift too big|truncates bits"
 
-echo "==== Step 5: Summarize ===="
-"$TOOL_DIR/summ-net.sh" ".kselftest-out/net.selftests.log" "$TOP_N" > "$RUN_DIR/test.summ.txt"
-
-# --- 6. 标准化函数 (Normalize) ---
+normalize_log() {
+    sed -E 's/^.*RSE\] //g; s/^\[SPARSE\] //g' | \
+    (grep -E "warning:|error:" || true) | \
+    (grep -vE "^(  CC|  LD|  AR|  AS|  CHECK|  OBJCOPY|  LDS|  GEN|  CHK|  BUILD|  MKPIGGY|  ZOFFSET|Kernel:)" || true) | \
+    (grep -vE "($NOISE_FILTER)" || true) | \
+    sed -E 's/[[:space:]]+(CC|LD|AR|CHECK)[[:space:]]+.*$//' | \
+    sed -E 's/^[[:space:]]*//; s/:[0-9]+:[0-9]+:/: /g; s/:[0-9]+:/: /g' | \
+    sort -u
+}
 
 normalize_test() {
-    # 1. 去首空格
-    # 2. 去除 socat 时间戳 (YYYY/MM/DD HH:MM:SS)
-    # 3. 去除 kselftest 序号 (not ok 123)
-    # 4. 去除编译类行号
-    sed -E '
-        s/^[[:space:]]*//;
-        s/^[0-9]{4}\/[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} //;
-	s/(nsa-|testns-|ns-)[a-zA-Z0-9]{6,}/ns-RANDOM/g;
-        s/^not ok [0-9]+ /not ok /;
-        s/^[0-9]+://
-    ' "$1" | sort -u
+    (grep -E "^(ok|not ok)" || true) | \
+    sed -E 's/^[[:space:]]*//; s/ # [0-9]+//g' | \
+    sort -u
 }
 
-normalize_build() {
-    # 去除文件名后的行列号 (file.c:12:34: -> file.c:)
-    sed -E 's/^[[:space:]]*//; s/:[0-9]+:[0-9]+:/:/g; s/:[0-9]+:/:/g' "$1" | sort -u
-}
-
-# --- 7. 回归报告生成器 ---
-report_diff_item() {
-    local ref="$1"
-    local curr="$2"
-    local title="$3"
-    local func="$4"
-
-    echo ">>> $title:"
-    if [ -f "$ref" ] && [ -f "$curr" ]; then
-        local diff_out
-        diff_out=$(comm -13 <($func "$ref") <($func "$curr"))
-        if [ -n "$diff_out" ]; then
-            echo "$diff_out"
-        else
-            echo "  (No new items)"
-        fi
-    else
-        echo "  (Skipped: Reference or Current file missing)"
+generate_diff() {
+    local cat=$1; local curr=$2; local ref=$3; local ref_name=$4
+    [ -f "$ref" ] || return 0
+    [ -f "$curr" ] || return 0
+    local diff_new="$RUN_DIR/diff.${cat}.vs.${ref_name}.new"
+    local diff_fixed="$RUN_DIR/diff.${cat}.vs.${ref_name}.fixed"
+    comm -13 <(sort "$ref") <(sort "$curr") > "$diff_new"
+    comm -23 <(sort "$ref") <(sort "$curr") > "$diff_fixed"
+    if [ "$cat" = "test" ]; then
+        (grep "^not ok" "$diff_new" > "${diff_new}.tmp" && mv "${diff_new}.tmp" "$diff_new") || true
+        (grep "^not ok" "$diff_fixed" > "${diff_fixed}.tmp" && mv "${diff_fixed}.tmp" "$diff_fixed") || true
     fi
-    echo ""
 }
 
-generate_report_section() {
-    local ref_dir="$1"
-    local label="$2"
-    local build_dir
-    build_dir=$(dirname "$RUN_DIR/build.all.log")
+# ==============================================================================
+# [Step 5] Build & Test
+# ==============================================================================
+echo "=== [$(date)] Build ($BUILD_MODE) ==="
+"$TOOL_DIR/config-net.sh" -o "$O_DIR" -"$BUILD_MODE" "$CC_FLAG"
+make O="$O_DIR" $([ "$COMPILER" = "clang" ] && echo "LLVM=1") olddefconfig
 
-    echo "##########################################################"
-    echo "   REGRESSION REPORT vs $label"
-    echo "##########################################################"
-    
-    # 标题不再叫 FAILURES，因为可能包含 OK
-    report_diff_item "$ref_dir/list.test.txt" \
-                     ".kselftest-out/list.test.txt" \
-                     "[TEST] NEW RESULTS (Regressions/Changes)" "normalize_test"
+"$TOOL_DIR/build-net.sh" -o "$O_DIR" "$CC_FLAG" "$([ "$SPARSE" -eq 1 ] && echo "-s")" -j"$CPUS" 2>&1 | tee "$RUN_DIR/build.all.log"
 
-    report_diff_item "$ref_dir/list.error.txt" \
-                     "$build_dir/list.error.txt" \
-                     "[BUILD] COMPILER ERRORS" "normalize_build"
+echo "=== Test ==="
+"$TOOL_DIR/run-net.sh" -o "$O_DIR" -p "$CPUS" -m "$MEM" "$CC_FLAG" $TEST_SCOPE 2>&1 | tee "$RUN_DIR/run-net.host.log" || true
 
-    report_diff_item "$ref_dir/list.warning.txt" \
-                     "$build_dir/list.warning.txt" \
-                     "[BUILD] COMPILER WARNINGS" "normalize_build"
+# ==============================================================================
+# [Step 6] Process Results
+# ==============================================================================
+echo "[info] Processing results..."
+set +e 
 
-    report_diff_item "$ref_dir/list.sparse.txt" \
-                     "$build_dir/list.sparse.txt" \
-                     "[SPARSE] STATIC ANALYSIS" "normalize_build"
-                     
-    echo -e "\n"
-}
-
-# --- 8. 邮件组装 ---
-MAIL_FILE="$RUN_DIR/mail.mbox"
-{
-  echo "Subject: [auto-net][${STATE_NAME}] run done: offline=$((1-UPDATE)) HEAD=${new_ref}"
-  echo "To: ${TO_EMAIL}"
-  echo ""
-  
-  if [ -d "$STATE_DIR/baseline" ]; then
-      generate_report_section "$STATE_DIR/baseline" "BASELINE"
-  else
-      echo "(No Baseline found, skipping regression check)"
-      echo ""
-  fi
-  
-  if [ -d "$STATE_DIR/prev" ]; then
-      generate_report_section "$STATE_DIR/prev" "PREV"
-  fi
-
-  echo "== CURRENT SUMMARY =="
-  cat "$RUN_DIR/build.summ.txt"
-  echo ""
-  cat "$RUN_DIR/test.summ.txt"
-
-  echo -e "\n== ARTIFACTS =="
-  echo "  Run Dir        : $RUN_DIR"
-  echo "  Raw Build Log  : $RUN_DIR/build.all.log (Mixed)"
-  echo "  -------------------------------------------------"
-  echo "  Build Errors   : $RUN_DIR/list.error.txt"
-  echo "  Build Warnings : $RUN_DIR/list.warning.txt"
-  echo "  Sparse Reports : $RUN_DIR/list.sparse.txt"
-  echo "  Test Results   : .kselftest-out/list.test.txt"
-  
-} > "$MAIL_FILE"
-
-# --- 9. 归档与发送 ---
-safe_cp() { [ -f "$1" ] && cp "$1" "$2"; }
-
-if [ "$RESET_B" -eq 1 ]; then
-    echo "[info] Updating Baseline..."
-    safe_cp ".kselftest-out/list.test.txt" "$STATE_DIR/baseline/"
-    safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.error.txt"   "$STATE_DIR/baseline/"
-    safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.warning.txt" "$STATE_DIR/baseline/"
-    safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.sparse.txt"  "$STATE_DIR/baseline/"
+if [ -f "$RUN_DIR/build.all.log" ]; then
+    grep -v "\[SPARSE\]" "$RUN_DIR/build.all.log" | normalize_log > "$RUN_DIR/list.build.txt"
+    grep "\[SPARSE\]" "$RUN_DIR/build.all.log" | sed -E 's/^\[SPARSE\] //g' | normalize_log > "$RUN_DIR/list.sparse.txt"
+else 
+    touch "$RUN_DIR/list.build.txt" "$RUN_DIR/list.sparse.txt"
 fi
 
-# 总是更新 Prev
-safe_cp ".kselftest-out/list.test.txt" "$STATE_DIR/prev/"
-safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.error.txt"   "$STATE_DIR/prev/"
-safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.warning.txt" "$STATE_DIR/prev/"
-safe_cp "$(dirname "$RUN_DIR/build.all.log")/list.sparse.txt"  "$STATE_DIR/prev/"
+if [ -f "$RUN_DIR/run-net.host.log" ]; then
+    normalize_test < "$RUN_DIR/run-net.host.log" > "$RUN_DIR/list.test.txt"
+else 
+    touch "$RUN_DIR/list.test.txt"
+fi
+
+for d in BASELINE PREV; do
+    ref_dir="${d}_DIR"
+    if [ -s "${!ref_dir}/list.test.txt" ]; then
+        generate_diff "test"   "$RUN_DIR/list.test.txt"   "${!ref_dir}/list.test.txt"   "${d,,}"
+        generate_diff "build"  "$RUN_DIR/list.build.txt"  "${!ref_dir}/list.build.txt"  "${d,,}"
+        generate_diff "sparse" "$RUN_DIR/list.sparse.txt" "${!ref_dir}/list.sparse.txt" "${d,,}"
+    fi
+done
+set -e
+
+# ==============================================================================
+# [Step 7] Report Generation
+# ==============================================================================
+MAIL_FILE="$RUN_DIR/mail.mbox"
+
+print_header() { echo "##########################################################"; echo "   $1"; echo "##########################################################"; }
+print_item() {
+    local tag=$1; local file=$2; local is_fix=${3:-0}; local title=$4
+    if [ -f "$file" ] && [ -s "$file" ]; then
+        echo ">>> [$tag] $title:"
+        if [ "$is_fix" -eq 1 ] && [[ "$file" == *"test"* ]]; then sed 's/^not ok/FIXED: ok/g' "$file" | head -n 20
+        else head -n 20 "$file"; fi
+        [ $(wc -l < "$file") -gt 20 ] && echo "... (and $(($(wc -l < "$file") - 20)) more)"
+        echo ""
+    fi
+}
+
+{
+    STATUS="PASS"
+    [ -f "$RUN_DIR/diff.test.vs.prev.new" ] && grep -q "not ok" "$RUN_DIR/diff.test.vs.prev.new" && STATUS="REGRESSION"
+    
+    echo "Subject: [auto-net][${RUN_TAG}] run done: offline=$((1-UPDATE)) HEAD=${GIT_COMMIT} (${STATUS})"
+    echo "To: ${TO_EMAIL}"
+    echo ""
+    echo "Git:    $GIT_BRANCH @ $GIT_COMMIT"
+    echo "Commit: $GIT_SUBJECT"
+    echo ""
+
+    if [ -s "$BASELINE_DIR/list.test.txt" ]; then
+        print_header "REGRESSION REPORT vs BASELINE"
+        print_item "TEST"   "$RUN_DIR/diff.test.vs.baseline.new" 0 "NEW FAILURES/CHANGES"
+        print_item "BUILD"  "$RUN_DIR/diff.build.vs.baseline.new" 0 "NEW COMPILER WARNINGS"
+        print_item "SPARSE" "$RUN_DIR/diff.sparse.vs.baseline.new" 0 "NEW ISSUES (Effective)"
+    fi
+
+    if [ -s "$PREV_DIR/list.test.txt" ]; then
+        print_header "REGRESSION REPORT vs PREV"
+        print_item "TEST"   "$RUN_DIR/diff.test.vs.prev.new" 0 "NEW FAILURES/CHANGES"
+        print_item "BUILD"  "$RUN_DIR/diff.build.vs.prev.new" 0 "NEW COMPILER WARNINGS"
+        print_item "SPARSE" "$RUN_DIR/diff.sparse.vs.prev.new" 0 "NEW ISSUES (Effective)"
+    fi
+
+    echo "== CURRENT SUMMARY =="
+    echo "errors_effective : $(grep -c "error:" "$RUN_DIR/list.build.txt" || echo 0)"
+    echo "warnings_effective : $(grep -c "warning:" "$RUN_DIR/list.build.txt" || echo 0)"
+    echo "sparse_effective : $(wc -l < "$RUN_DIR/list.sparse.txt")"
+    echo ""
+
+    echo "=========================================================="
+    echo "   NET SELFTESTS SUMMARY"
+    echo "=========================================================="
+    # 使用 xargs 去掉 wc 产生的多余空格
+    TOTAL=$(wc -l < "$RUN_DIR/list.test.txt" | xargs)
+    FAIL=$(grep -c "^not ok" "$RUN_DIR/list.test.txt" | xargs || echo 0)
+    SKIP=$(grep -c "SKIP" "$RUN_DIR/list.test.txt" | xargs || echo 0)
+    
+    # 确保变量不为空，否则设为 0
+    : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
+    
+    PASS=$((TOTAL - FAIL - SKIP))
+    printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" $PASS $TOTAL $SKIP $FAIL
+
+    echo ""
+    echo "=========================================================="
+    echo "   TOP DETAILS (Max $TOP_N per category)"
+    echo "=========================================================="
+    grep "^not ok" "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.failed.txt" || true
+    print_item "TEST"   "$RUN_DIR/list.test.failed.txt" 0 "TOP $TOP_N TEST FAILURES"
+    print_item "SPARSE" "$RUN_DIR/list.sparse.txt"       0 "TOP $TOP_N SPARSE ISSUES"
+    print_item "BUILD"  "$RUN_DIR/list.build.txt"        0 "TOP $TOP_N BUILD WARNINGS"
+
+    echo "== ARTIFACTS =="
+    printf "  Run Dir  : %s\n" "$RUN_DIR"
+    printf "  Kernel   : %s\n" "$O_DIR/arch/x86/boot/bzImage"
+    printf "  Config   : %s\n" "$O_DIR/.config"
+    printf "  Logs     : %s\n" "$RUN_DIR/run-net.host.log, $RUN_DIR/build.all.log"
+    printf "  Lists    : %s\n" "$RUN_DIR/list.{test,build,sparse}.txt"
+    printf "  Diffs    : %s\n" "$RUN_DIR/diff.vs_baseline.*.txt"
+
+} > "$MAIL_FILE"
+
+# ==============================================================================
+# [Step 8] Update State
+# ==============================================================================
+update_state_dir() {
+    local dest="$1"
+    mkdir -p "$dest"
+    cp "$RUN_DIR/list.test.txt"   "$dest/"
+    cp "$RUN_DIR/list.build.txt"  "$dest/"
+    cp "$RUN_DIR/list.sparse.txt" "$dest/"
+}
+
+if [ ! -s "$BASELINE_DIR/list.test.txt" ] || [ "$RESET_B" -eq 1 ]; then
+    update_state_dir "$BASELINE_DIR"
+fi
+
+update_state_dir "$PREV_DIR"
+
+if [ -s "$RUN_DIR/build.all.log" ]; then
+    rm -f "$LATEST_LINK"
+    ln -s "$(readlink -f "$RUN_DIR")" "$LATEST_LINK"
+fi
 
 if [ -n "$TO_EMAIL" ]; then
-    git send-email --to "${TO_EMAIL}" --confirm=never --8bit-encoding=UTF-8 "$MAIL_FILE"
-else
-    echo "[info] Report saved to $MAIL_FILE"
+    git send-email --to "${TO_EMAIL}" --confirm=never --quiet "$MAIL_FILE" || echo "[WARN] Send failed"
 fi

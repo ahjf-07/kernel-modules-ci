@@ -31,7 +31,36 @@ TARGET_REF="upstream/master"
 TO_EMAIL="${AUTO_EMAIL:-}"
 SPARSE_SUBTREES=""
 
-usage() { echo "Usage: ..."; exit 0; }
+usage() {
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Build Options:"
+    echo "  -l           Use Clang compiler (Default)"
+    echo "  -g           Use GCC compiler"
+    echo "  -s           Enable Sparse checking (Default)"
+    echo "  --no-sparse  Disable Sparse checking"
+    echo "  -S <dirs>    Sparse check specific subtrees (e.g. 'kernel/bpf')"
+    echo "  -U           Update source code (git pull)"
+    echo "  -u           Offline mode (Skip update, Default)"
+    echo "  -m           Make mrproper (Full build, Default)"
+    echo "  -c           Make clean (Clean build)"
+    echo "  -i           Incremental build"
+    echo ""
+    echo "Test Options:"
+    echo "  --full       Run full tests (Default)"
+    echo "  --ff         Run faster tests (skip heavy tests)"
+    echo "  -f <num>     Run fast tests with <num> count"
+    echo ""
+    echo "General Options:"
+    echo "  -e <email>   Send report to email"
+    echo "  -t <ref>     Target git reference (Default: upstream/master)"
+    echo "  -o <dir>     Output Base Directory (Default: ../out)"
+    echo "  -P <cpus>    VM CPUs (Default: 8)"
+    echo "  -M <mem>     VM Memory (Default: 8G)"
+    echo "  --reset-baseline  Force update baseline"
+    echo "  -h           Show this help"
+    exit 0
+}
 
 # --- 3. 参数解析 ---
 SHORT_OPTS="hlgsUumcif:P:M:e:t:o:S:"
