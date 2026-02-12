@@ -245,13 +245,10 @@ print_item() {
     echo "   NET SELFTESTS SUMMARY"
     echo "=========================================================="
     # 使用 xargs 去掉 wc 产生的多余空格
-    TOTAL=$(wc -l < "$RUN_DIR/list.test.txt" | xargs)
-    FAIL=$(grep -c "^not ok" "$RUN_DIR/list.test.txt" | xargs || echo 0)
-    SKIP=$(grep -c "SKIP" "$RUN_DIR/list.test.txt" | xargs || echo 0)
-    
-    # 确保变量不为空，否则设为 0
+    TOTAL=$( [ -f "$RUN_DIR/list.test.txt" ] && wc -l < "$RUN_DIR/list.test.txt" | xargs || echo 0 )
+    FAIL=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -c "^not ok" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
+    SKIP=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -c "SKIP" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
     : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
-    
     PASS=$((TOTAL - FAIL - SKIP))
     printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" $PASS $TOTAL $SKIP $FAIL
 

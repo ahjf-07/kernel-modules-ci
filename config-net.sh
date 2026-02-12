@@ -4,16 +4,30 @@ set -eu
 
 O_DIR=""
 LLVM_FLAG=""
+CLEAN_MODE="i"   # i: incremental (default) / c: clean / m: mrproper
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -o) O_DIR="$2"; shift 2 ;;
         -l) LLVM_FLAG="LLVM=1"; shift ;;
+        -g) LLVM_FLAG=""; shift ;;
+        -m) CLEAN_MODE="m"; shift ;;
+        -c) CLEAN_MODE="c"; shift ;;
+        -i) CLEAN_MODE="i"; shift ;;
         *) shift ;;
     esac
 done
 
 [ -z "$O_DIR" ] && exit 1
 mkdir -p "$O_DIR"
+
+# 0. 清理策略（由 -m/-c/-i 控制）
+case "$CLEAN_MODE" in
+    m) make O="$O_DIR" $LLVM_FLAG mrproper ;;
+    c) make O="$O_DIR" $LLVM_FLAG clean ;;
+    i) : ;;   # do nothing
+esac
+
 
 # 1. 基础配置
 make O="$O_DIR" $LLVM_FLAG x86_64_defconfig
