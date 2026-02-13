@@ -52,3 +52,21 @@ fi
 echo "[build] Executing: $MAKE_CMD"
 $MAKE_CMD bzImage
 $MAKE_CMD modules
+
+# 4) 安装内核头文件（供 selftests 使用）
+$MAKE_CMD headers_install
+
+# 5) 安装 net selftests（必须包含 net/lib，否则缺 xdp_dummy.bpf.o）
+mkdir -p "$O_DIR_ABS/kselftest/kselftest_install"
+make -C tools/testing/selftests O="$O_DIR_ABS" TARGETS="net net/lib" $CC_FLAG install \
+     KHDR_INCLUDES="-I$O_DIR_ABS/usr/include" -j"$CPUS" 2>&1 | tee -a "$O_DIR_ABS/../auto-net-selftests-install.log"
+
+# 6) 硬验证：没装出来就直接报错退出
+XDP_OBJ="$O_DIR_ABS/kselftest/kselftest_install/net/lib/xdp_dummy.bpf.o"
+if [ ! -s "$XDP_OBJ" ]; then
+  echo "ERROR: missing $XDP_OBJ" >&2
+  echo "HINT: selftests install must include TARGETS=\"net net/lib\"" >&2
+  find "$O_DIR_ABS/kselftest/kselftest_install/net" -maxdepth 3 -type f -name 'xdp_dummy*' -ls >&2 || true
+  exit 2
+fi
+
