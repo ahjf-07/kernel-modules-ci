@@ -123,6 +123,11 @@ CONFIG_BPF_JIT_ALWAYS_ON=y
 CONFIG_BPF_LSM=y
 CONFIG_IKHEADERS=y
 
+# 解决 cgroup_iter_memcg.c 等新测试的依赖
+CONFIG_MEMCG=y
+CONFIG_MEMCG_KMEM=y
+CONFIG_CGROUPS=y
+
 # == Netfilter / Conntrack Dependencies (Fixes bpf_nf tests) ==
 CONFIG_NETFILTER=y
 CONFIG_NF_CONNTRACK=y

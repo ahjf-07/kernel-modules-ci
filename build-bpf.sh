@@ -39,7 +39,9 @@ if [ "$LLVM" -eq 1 ]; then
     export LLVM=1
     export CC="clang"
     export LD="ld.lld"
-    MAKE_ARGS="LLVM=1 LLVM_IAS=1"
+    export HOSTCC="clang"
+    export HOSTCXX="clang++"
+    MAKE_ARGS="LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld HOSTCC=clang HOSTCXX=clang++"
 fi
 
 # [关键修改] 挂载 sparse-wrapper
@@ -99,9 +101,11 @@ mkdir -p "$OUT_BPF"
 KHDR="-isystem $O/usr/include"
 
 echo "[build] tools: libbpf headers..."
+mkdir -p "$OUT_BPF/tools/build/libbpf"
 make -C "$LINUX_ROOT/tools/lib/bpf" OUTPUT="$OUT_BPF/tools/build/libbpf/" DESTDIR="$OUT_BPF" prefix="/usr" $MAKE_ARGS -j"$JOBS" install_headers
 
 echo "[build] tools: resolve_btfids..."
+mkdir -p "$OUT_BPF/tools/build/resolve_btfids"
 make -C "$LINUX_ROOT/tools/bpf/resolve_btfids" OUTPUT="$OUT_BPF/tools/build/resolve_btfids/" DESTDIR="$OUT_BPF" prefix="/usr" $MAKE_ARGS -j"$JOBS"
 
 # --- 5. 编译 Selftests ---

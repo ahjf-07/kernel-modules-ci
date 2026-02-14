@@ -180,11 +180,36 @@ if [ "$TEST_SCOPE" = "faster" ]; then RUN_ARGS="$RUN_ARGS --ff"; elif [ "$TEST_S
 
 echo "==== Step 5: Summarize ===="
 TEST_LOG="$RUN_DIR/run-bpf.host.log"
-"$TOOL_DIR/summ-bpf.sh" "$TEST_LOG" > "$RUN_DIR/test.summ.txt" 2>&1 || echo "Summary failed" > "$RUN_DIR/test.summ.txt"
 
-grep "^#" "$TEST_LOG" > "$RUN_DIR/list.test.txt" || true
-grep -E ":(FAIL|ERROR)" "$TEST_LOG" | grep -v "Summary:" > "$RUN_DIR/list.test.failed.txt" || true
-grep -E ":SKIP" "$TEST_LOG" > "$RUN_DIR/list.test.skipped.txt" || true
+# --- BPF lists (single source of truth; align with auto-net style) ---
+# Only keep test table lines starting with "#". Dedup to avoid double-run pollution.
+grep "^#" "$TEST_LOG" \
+  | sed -E 's/\x1b\[[0-9;]*m//g; s/[[:space:]]*$//' \
+  | awk '!seen[$0]++' \
+  > "$RUN_DIR/list.test.txt" || true
+
+# Fail/Skip lists derived from list.test.txt (NOT from sub-step lines like "test_xxx:FAIL:...")
+grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:(FAIL|ERROR)$' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.failed.txt" || true
+grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:SKIP' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.skipped.txt" || true
+
+# --- BPF SELFTESTS SUMMARY (written to file, used by mail) ---
+{
+  echo "=========================================================="
+  echo "   BPF SELFTESTS SUMMARY"
+  echo "=========================================================="
+  # Prefer test_progs Summary line if present
+  SUMM_LINE=$(grep "Summary: " "$TEST_LOG" | tail -n 1)
+  if [ -n "$SUMM_LINE" ]; then
+    echo "$SUMM_LINE"
+  else
+    TOTAL=$(wc -l < "$RUN_DIR/list.test.txt" | xargs 2>/dev/null || echo 0)
+    FAIL=$(wc -l < "$RUN_DIR/list.test.failed.txt" | xargs 2>/dev/null || echo 0)
+    SKIP=$(wc -l < "$RUN_DIR/list.test.skipped.txt" | xargs 2>/dev/null || echo 0)
+    PASS=$((TOTAL - FAIL - SKIP))
+    printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" "$PASS" "$TOTAL" "$SKIP" "$FAIL"
+  fi
+  echo "=========================================================="
+} > "$RUN_DIR/test.summ.txt" 2>&1 || echo "Summary failed" > "$RUN_DIR/test.summ.txt"
 
 # --- 7. 标准化函数 ---
 normalize_test() {
@@ -223,7 +248,8 @@ generate_report_section() {
     echo "##########################################################"
     echo "   REGRESSION REPORT vs $label_name"
     echo "##########################################################"
-    report_diff_item "$ref_dir/list.test.txt"           "$RUN_DIR/list.test.txt"           "[TEST] NEW FAILURES/CHANGES"       "normalize_test"  "$label_slug" "test"
+    report_diff_item "$ref_dir/list.test.failed.txt"    "$RUN_DIR/list.test.failed.txt"    "[TEST] NEW FAILURES"           "cat"            "$label_slug" "test_failed"
+    report_diff_item "$ref_dir/list.test.skipped.txt"   "$RUN_DIR/list.test.skipped.txt"   "[TEST] NEW SKIPS"              "cat"            "$label_slug" "test_skipped"
     report_diff_item "$ref_dir/list.build.error.txt"    "$RUN_DIR/list.build.error.txt"    "[BUILD] NEW COMPILER ERRORS"       "normalize_build" "$label_slug" "build_error"
     report_diff_item "$ref_dir/list.build.warning.txt"  "$RUN_DIR/list.build.warning.txt"  "[BUILD] NEW COMPILER WARNINGS"     "normalize_build" "$label_slug" "build_warning"
     report_diff_item "$ref_dir/list.sparse.txt"         "$RUN_DIR/list.sparse.txt"         "[SPARSE] NEW ISSUES (Effective)"   "normalize_build" "$label_slug" "sparse"
@@ -247,12 +273,46 @@ MAIL_FILE="$RUN_DIR/mail.mbox"
   echo -e "\n=========================================================="
   echo "                TOP DETAILS (Max 20 per category)"
   echo "=========================================================="
-  [ -s "$RUN_DIR/list.build.error.txt" ] && echo -e "\n>>> TOP 20 COMPILER ERRORS:\n$(head -n 20 "$RUN_DIR/list.build.error.txt")"
-  [ -s "$RUN_DIR/list.build.warning.txt" ] && echo -e "\n>>> TOP 20 COMPILER WARNINGS:\n$(head -n 20 "$RUN_DIR/list.build.warning.txt")"
-  [ -s "$RUN_DIR/list.sparse.txt" ] && echo -e "\n>>> TOP 20 SPARSE ISSUES:\n$(head -n 20 "$RUN_DIR/list.sparse.txt")"
-  grep -q ":FAIL" "$TEST_LOG" && echo -e "\n>>> TOP 20 TEST FAILURES:\n$(grep ":FAIL" "$TEST_LOG" | grep -v "Summary:" | head -n 20)"
+  if [ -s "$RUN_DIR/list.build.error.txt" ]; then
+    c=$(wc -l < "$RUN_DIR/list.build.error.txt" | xargs)
+    echo ""
+    echo ">>> TOP 20 COMPILER ERRORS:"
+    head -n 20 "$RUN_DIR/list.build.error.txt"
+    [ "$c" -gt 20 ] && echo "... (Truncated: See artifacts for full $c items)"
+  fi
+
+  if [ -s "$RUN_DIR/list.build.warning.txt" ]; then
+    c=$(wc -l < "$RUN_DIR/list.build.warning.txt" | xargs)
+    echo ""
+    echo ">>> TOP 20 COMPILER WARNINGS:"
+    head -n 20 "$RUN_DIR/list.build.warning.txt"
+    [ "$c" -gt 20 ] && echo "... (Truncated: See artifacts for full $c items)"
+  fi
+
+  if [ -s "$RUN_DIR/list.sparse.txt" ]; then
+    c=$(wc -l < "$RUN_DIR/list.sparse.txt" | xargs)
+    echo ""
+    echo ">>> TOP 20 SPARSE ISSUES:"
+    head -n 20 "$RUN_DIR/list.sparse.txt"
+    [ "$c" -gt 20 ] && echo "... (Truncated: See artifacts for full $c items)"
+  fi
+  if [ -s "$RUN_DIR/list.test.failed.txt" ]; then
+    c=$(wc -l < "$RUN_DIR/list.test.failed.txt" | xargs)
+    echo ""
+    echo ">>> TOP 20 TEST FAILURES:"
+    head -n 20 "$RUN_DIR/list.test.failed.txt"
+    [ "$c" -gt 20 ] && echo "... (Truncated: See artifacts for full $c items)"
+  fi
   
-  echo -e "\n== ARTIFACTS =="
+  if [ -s "$RUN_DIR/list.test.skipped.txt" ]; then
+    c=$(wc -l < "$RUN_DIR/list.test.skipped.txt" | xargs)
+    echo ""
+    echo ">>> TOP 20 TEST SKIPS:"
+    head -n 20 "$RUN_DIR/list.test.skipped.txt"
+    [ "$c" -gt 20 ] && echo "... (Truncated: See artifacts for full $c items)"
+  fi
+  echo ""
+  echo "== ARTIFACTS =="
   echo "  Run Dir : $RUN_DIR"
   echo "  Logs    : $RUN_DIR/run-bpf.host.log, $RUN_DIR/build.all.log"
   echo "  Lists   : $RUN_DIR/list.{test.failed,test.skipped,build.error,build.warning,sparse}.txt"
@@ -264,6 +324,8 @@ safe_cp() { [ -f "$1" ] && cp "$1" "$2"; }
 update_state() {
     local dest="$1"; mkdir -p "$dest"
     safe_cp "$RUN_DIR/list.test.txt"           "$dest/"
+    safe_cp "$RUN_DIR/list.test.failed.txt"    "$dest/"
+    safe_cp "$RUN_DIR/list.test.skipped.txt"   "$dest/"
     safe_cp "$RUN_DIR/list.build.error.txt"    "$dest/"
     safe_cp "$RUN_DIR/list.build.warning.txt"  "$dest/"
     safe_cp "$RUN_DIR/list.sparse.txt"         "$dest/"
