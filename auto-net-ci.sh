@@ -24,7 +24,7 @@ CC_FLAG="-l"
 
 UPDATE=0
 BUILD_MODE="m"
-SPARSE=1
+SPARSE=0
 TEST_SCOPE=""
 RESET_B=0
 TOP_N=30
@@ -42,13 +42,13 @@ usage() {
     echo "Build Options:"
     echo "  -g                  Use GCC compiler"
     echo "  -l                  Use Clang/LLVM compiler (Default)"
-    echo "  -U                  Update source code (perform 'git pull --rebase')"
-    echo "  -u                  Offline mode (Skip git update)"
+    echo "  -U                  Pull upstream/master, checkout master, merge --ff-only, then build"
+    echo "  -u                  Build from current branch (Default)"
     echo "  -m                  Make mrproper (Full clean build, Recommended)"
     echo "  -c                  Make clean (Standard clean)"
     echo "  -i                  Incremental build (Faster, but risky for config changes)"
-    echo "  -s                  Enable Sparse checking (Default: Enabled)"
-    echo "  -S                  Disable Sparse checking"
+    echo "  -s                  Enable Sparse checking"
+    echo "  -S                  Disable Sparse checking (Default)"
     echo ""
     echo "Test Options:"
     echo "  --full              Run full tests (Includes stress tests)"
@@ -100,8 +100,10 @@ done
 # [Step 3] Environment & Git
 # ==============================================================================
 if [ "$UPDATE" -eq 1 ]; then
-    echo "[git] Pulling updates..."
-    git pull --rebase || echo "[WARN] Git pull failed"
+    echo "[git] Pulling upstream/master and fast-forwarding local master..."
+    git fetch upstream master || echo "[WARN] git fetch upstream master failed"
+    git checkout master || git checkout -b master
+    git merge --ff-only upstream/master || echo "[WARN] git merge --ff-only upstream/master failed"
 fi
 
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
