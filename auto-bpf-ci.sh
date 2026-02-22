@@ -21,16 +21,13 @@ O_BASE="../out"
 COMPILER="clang"
 BUILD_MODE="m"
 UPDATE=0
-SPARSE=1
+SPARSE=0
 TEST_SCOPE="full"
 TEST_COUNT=30
 CPUS=8
 MEM=8G
 RESET_B=0
-GIT_BRANCH="master"
-TARGET_REF="upstream/master"
 TO_EMAIL="${AUTO_EMAIL:-}"
-SPARSE_SUBTREES=""
 
 usage() {
     echo "Usage: $0 [options]"
@@ -38,11 +35,10 @@ usage() {
     echo "Build Options:"
     echo "  -l           Use Clang compiler (Default)"
     echo "  -g           Use GCC compiler"
-    echo "  -s           Enable Sparse checking (Default)"
-    echo "  --no-sparse  Disable Sparse checking"
-    echo "  -S <dirs>    Sparse check specific subtrees (e.g. 'kernel/bpf')"
-    echo "  -U           Update source code (git pull)"
-    echo "  -u           Offline mode (Skip update, Default)"
+    echo "  -s           Enable Sparse checking"
+    echo "  -S           Disable Sparse checking (Default)"
+    echo "  -U           Pull upstream/master, checkout master, merge --ff-only, then build"
+    echo "  -u           Build from current branch (Default)"
     echo "  -m           Make mrproper (Full build, Default)"
     echo "  -c           Make clean (Clean build)"
     echo "  -i           Incremental build"
@@ -54,7 +50,6 @@ usage() {
     echo ""
     echo "General Options:"
     echo "  -e <email>   Send report to email"
-    echo "  -t <ref>     Target git reference (Default: upstream/master)"
     echo "  -o <dir>     Output Base Directory (Default: ../out)"
     echo "  -P <cpus>    VM CPUs (Default: 8)"
     echo "  -M <mem>     VM Memory (Default: 8G)"
@@ -64,8 +59,8 @@ usage() {
 }
 
 # --- 3. 参数解析 ---
-SHORT_OPTS="hlgsUumcif:P:M:e:t:o:S:"
-LONG_OPTS="full,ff,reset-baseline,no-sparse"
+SHORT_OPTS="hlgsSUumcif:P:M:e:o:"
+LONG_OPTS="full,ff,reset-baseline"
 PARSED_ARGS=$(getopt -o "$SHORT_OPTS" -l "$LONG_OPTS" -n "$0" -- "$@")
 if [ $? -ne 0 ]; then exit 1; fi
 eval set -- "$PARSED_ARGS"
@@ -76,7 +71,7 @@ while true; do
         -l) COMPILER="clang"; shift ;;
         -g) COMPILER="gcc"; shift ;;
         -s) SPARSE=1; shift ;;
-        --no-sparse) SPARSE=0; shift ;;
+        -S) SPARSE=0; shift ;;
         -U) UPDATE=1; shift ;;
         -u) UPDATE=0; shift ;;
         -m) BUILD_MODE="m"; shift ;;
@@ -89,9 +84,7 @@ while true; do
         -M) MEM="$2"; shift 2 ;;
         --reset-baseline) RESET_B=1; shift ;;
         -e) TO_EMAIL="$2"; shift 2 ;;
-        -t) TARGET_REF="$2"; shift 2 ;;
         -o) O_BASE="$2"; shift 2 ;;
-        -S) SPARSE_SUBTREES="$2"; shift 2 ;;
         --) shift; break ;;
         *) echo "Internal error: $1"; exit 1 ;;
     esac
@@ -117,12 +110,10 @@ mkdir -p "$O" "$STATE_DIR/baseline" "$STATE_DIR/prev"
 
 # --- 5. Git ---
 if [ "$UPDATE" -eq 1 ]; then
-    REMOTE="${TARGET_REF%%/*}"
-    BRANCH="${TARGET_REF#*/}"
-    echo "[git] Updating from $REMOTE/$BRANCH..."
-    git fetch "$REMOTE"
-    git checkout "$GIT_BRANCH" || git checkout -b "$GIT_BRANCH"
-    git pull --ff-only "$REMOTE" "$BRANCH"
+    echo "[git] Pulling upstream/master and fast-forwarding local master..."
+    git fetch upstream master
+    git checkout master || git checkout -b master
+    git merge --ff-only upstream/master
 fi
 new_ref=$(git rev-parse HEAD)
 NOW=$(date +%Y%m%dT%H%M%SZ); RUN_DIR="$STATE_DIR/runs/$NOW"; mkdir -p "$RUN_DIR"
@@ -139,7 +130,6 @@ echo "==== Step 2: Build ===="
 BUILD_ARGS="-r $LINUX_ROOT -o $O -j$(nproc)"
 [ "$COMPILER" = "clang" ] && BUILD_ARGS="$BUILD_ARGS -l"
 [ "$SPARSE" -eq 1 ] && BUILD_ARGS="$BUILD_ARGS -s"
-[ -n "${SPARSE_SUBTREES:-}" ] && BUILD_ARGS="$BUILD_ARGS -S \"$SPARSE_SUBTREES\""
 if [ "$BUILD_MODE" = "i" ]; then BUILD_ARGS="$BUILD_ARGS -i"; fi
 
 "$TOOL_DIR/build-bpf.sh" $BUILD_ARGS |& tee "$RUN_DIR/build.all.log"
