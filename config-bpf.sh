@@ -128,6 +128,13 @@ CONFIG_MEMCG=y
 CONFIG_MEMCG_KMEM=y
 CONFIG_CGROUPS=y
 
+# == nftables flowtable (for xdp_flowtable selftest) ==
+CONFIG_NETFILTER=y
+CONFIG_NF_TABLES=y
+CONFIG_NF_FLOW_TABLE=y
+CONFIG_NF_FLOW_TABLE_INET=y
+CONFIG_NFT_FLOW_OFFLOAD=y
+
 # == Netfilter / Conntrack Dependencies (Fixes bpf_nf tests) ==
 CONFIG_NETFILTER=y
 CONFIG_NF_CONNTRACK=y
@@ -168,6 +175,12 @@ EOF
 echo "[cfg] merging CI overrides..."
 "$HOST_LINUX_ROOT/scripts/kconfig/merge_config.sh" \
     -m -r -O "$O" "$O/.config" "$FRAG" >/dev/null
+
+# --- 4.1 Force critical options (merge_config -r may drop unmet symbols) ---
+"$HOST_LINUX_ROOT/scripts/config" --file "$O/.config" -e NF_TABLES
+"$HOST_LINUX_ROOT/scripts/config" --file "$O/.config" -e NF_FLOW_TABLE
+"$HOST_LINUX_ROOT/scripts/config" --file "$O/.config" -e NF_FLOW_TABLE_INET
+"$HOST_LINUX_ROOT/scripts/config" --file "$O/.config" -e NFT_FLOW_OFFLOAD
 
 # --- 5. Finalize ---
 echo "[cfg] finalizing .config..."

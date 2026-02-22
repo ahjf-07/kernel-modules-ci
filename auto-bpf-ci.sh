@@ -5,6 +5,7 @@
 # 2. Features: Artifacts persistence, Email reporting, Robust log splitting
 set -eu
 set -o pipefail
+export LC_ALL=C
 
 TOOL_DIR=$(cd "$(dirname "$0")" && pwd)
 
@@ -229,7 +230,12 @@ report_diff_item() {
     local diff_file="$RUN_DIR/diff.vs_${label}.${type}.txt"
     echo ">>> $title:"
     if [ -f "$ref" ] && [ -f "$curr" ]; then
-        comm -13 <($func "$ref") <($func "$curr") > "$diff_file"
+	set +e
+        comm -13 <(sort "$ref") <(sort "$curr") > "$diff_file"
+        rc=$?
+        set -e
+        # 允许 0 (无差异) 和 1 (有差异), 仅 2 (报错) 时退出
+	[ $rc -eq 0 ] || [ $rc -eq 1 ] || { echo "comm failed (rc=$rc) for $title" >&2; exit $rc; }
         if [ -s "$diff_file" ]; then
             local count=$(wc -l < "$diff_file")
             head -n 20 "$diff_file"
