@@ -146,11 +146,15 @@ grep -v "\[SPARSE\]" "$RUN_DIR/build.all.log" > "$RUN_DIR/build.raw.log" || true
 # - sed 1: 去掉 [SPARSE] 前缀
 # - sed 2: 去掉行尾的构建命令 (CC/LD等)
 # - grep : [关键] 只保留符合 "绝对路径:行号:列号:" 格式的完美行
-grep "\[SPARSE\]" "$RUN_DIR/build.all.log" \
-    | sed 's/.*\[SPARSE\] //' \
-    | sed -E 's/[[:space:]]+(CC|LD|LDS|AR|AS|GEN|CHK)[[:space:]]+.*$//' \
-    | grep -E "^/.*:[0-9]+:[0-9]+:" \
-    > "$RUN_DIR/sparse.cleaned.log"
+if grep -q "\[SPARSE\]" "$RUN_DIR/build.all.log"; then
+    grep "\[SPARSE\]" "$RUN_DIR/build.all.log" \
+        | sed 's/.*\[SPARSE\] //' \
+        | sed -E 's/[[:space:]]+(CC|LD|LDS|AR|AS|GEN|CHK)[[:space:]]+.*$//' \
+        | grep -E "^/.*:[0-9]+:[0-9]+:" \
+        > "$RUN_DIR/sparse.cleaned.log" || true
+else
+    : > "$RUN_DIR/sparse.cleaned.log"
+fi
 
 # 3. 生成最终列表
 grep -E '(^|: )error:' "$RUN_DIR/build.raw.log" | grep -vE "($NOISE_FILTER)" > "$RUN_DIR/list.build.error.txt" || true

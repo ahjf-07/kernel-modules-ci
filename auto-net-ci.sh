@@ -176,7 +176,11 @@ set +e
 
 if [ -f "$RUN_DIR/build.all.log" ]; then
     grep -v "\[SPARSE\]" "$RUN_DIR/build.all.log" | normalize_log > "$RUN_DIR/list.build.txt"
-    grep "\[SPARSE\]" "$RUN_DIR/build.all.log" | sed -E 's/^\[SPARSE\] //g' | normalize_log > "$RUN_DIR/list.sparse.txt"
+    if grep -q "\[SPARSE\]" "$RUN_DIR/build.all.log"; then
+        grep "\[SPARSE\]" "$RUN_DIR/build.all.log" | sed -E 's/^\[SPARSE\] //g' | normalize_log > "$RUN_DIR/list.sparse.txt"
+    else
+        : > "$RUN_DIR/list.sparse.txt"
+    fi
 else 
     touch "$RUN_DIR/list.build.txt" "$RUN_DIR/list.sparse.txt"
 fi
