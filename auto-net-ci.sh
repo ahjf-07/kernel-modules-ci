@@ -48,6 +48,7 @@ usage() {
     echo "  -c                  Make clean (Standard clean)"
     echo "  -i                  Incremental build (Faster, but risky for config changes)"
     echo "  -s                  Enable Sparse checking (Default: Enabled)"
+    echo "  -S                  Disable Sparse checking"
     echo ""
     echo "Test Options:"
     echo "  --full              Run full tests (Includes stress tests)"
@@ -67,7 +68,7 @@ usage() {
 }
 
 # 解析参数
-SHORT_OPTS="hglUumcisN:O:P:M:e:"
+SHORT_OPTS="hglUumcisSN:O:P:M:e:"
 LONG_OPTS="full,fast,ffast,reset-baseline,top:"
 PARSED_ARGS=$(getopt -o "$SHORT_OPTS" -l "$LONG_OPTS" -n "$0" -- "$@")
 eval set -- "$PARSED_ARGS"
@@ -83,6 +84,7 @@ while true; do
         -c) BUILD_MODE="c" ; shift ;;
         -i) BUILD_MODE="i" ; shift ;;
         -s) SPARSE=1 ; shift ;;
+        -S) SPARSE=0 ; shift ;;
         -P) CPUS="$2" ; shift 2 ;;
         -M) MEM="$2" ; shift 2 ;;
         -N|--top) TOP_N="$2" ; shift 2 ;;
@@ -159,7 +161,7 @@ echo "=== [$(date)] Build ($BUILD_MODE) ==="
 "$TOOL_DIR/config-net.sh" -o "$O_DIR" -"$BUILD_MODE" "$CC_FLAG"
 make O="$O_DIR" $([ "$COMPILER" = "clang" ] && echo "LLVM=1") olddefconfig
 
-"$TOOL_DIR/build-net.sh" -o "$O_DIR" "$CC_FLAG" "$([ "$SPARSE" -eq 1 ] && echo "-s")" -j"$CPUS" 2>&1 | tee "$RUN_DIR/build.all.log"
+"$TOOL_DIR/build-net.sh" -o "$O_DIR" "$CC_FLAG" $([ "$SPARSE" -eq 1 ] && echo "-s") -j"$CPUS" 2>&1 | tee "$RUN_DIR/build.all.log"
 
 echo "=== Test ==="
 "$TOOL_DIR/run-net.sh" -o "$O_DIR" -p "$CPUS" -m "$MEM" "$CC_FLAG" $TEST_SCOPE 2>&1 | tee "$RUN_DIR/run-net.host.log" || true
