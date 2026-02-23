@@ -255,9 +255,7 @@ print_item() {
     # Count by normalized TAP result lines and keep FAIL/SKIP mutually exclusive.
     TOTAL=$( [ -f "$RUN_DIR/list.test.txt" ] && wc -l < "$RUN_DIR/list.test.txt" | xargs || echo 0 )
     SKIP=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -cE "# *SKIP\b" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
-    FAIL=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -cE "^not ok" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
-    FAIL=$((FAIL - SKIP))
-    [ "$FAIL" -lt 0 ] && FAIL=0
+    FAIL=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -cE "^not ok" "$RUN_DIR/list.test.txt" | grep -vcE "# *SKIP\b" || true )
     : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
     PASS=$((TOTAL - FAIL - SKIP))
     [ "$PASS" -lt 0 ] && PASS=0
