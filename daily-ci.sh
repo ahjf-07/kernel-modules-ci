@@ -8,12 +8,9 @@ export PATH="/home/u2404/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 export HOME="/home/u2404"
 export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}"
 
-# 让 crontab 也能读取到邮件相关环境变量（如 AUTO_EMAIL、SMTP_*）
-ENV_FILE="$HOME/.config/kernel-modules-ci/daily-ci.env"
-if [ -f "$ENV_FILE" ]; then
-    # shellcheck source=/dev/null
-    . "$ENV_FILE"
-fi
+# 固定收件人（crontab 场景），可在外部通过 AUTO_EMAIL 覆盖
+AUTO_EMAIL="${AUTO_EMAIL:-sun.jian.kdev@gmail.com}"
+export AUTO_EMAIL
 
 # 1. 自动获取脚本所在目录 (sj-ktools)
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -40,17 +37,10 @@ check_status() {
 echo "==========================================="
 echo "任务开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
 echo "当前工作目录: $(pwd)"
+echo "[INFO] CI 邮件接收人: $AUTO_EMAIL"
 echo "==========================================="
 
-if [ -z "${AUTO_EMAIL:-}" ]; then
-    echo "[WARN] AUTO_EMAIL 未设置，CI 将只生成报告文件，不会执行 git send-email。"
-    echo "[WARN] 可在 $ENV_FILE 中添加: AUTO_EMAIL=you@example.com"
-fi
-
-EMAIL_ARG=""
-if [ -n "${AUTO_EMAIL:-}" ]; then
-    EMAIL_ARG=" -e $(printf '%q' "$AUTO_EMAIL")"
-fi
+EMAIL_ARG=" -e $(printf '%q' "$AUTO_EMAIL")"
 
 # 顺序执行任务
 script -q -c "$SCRIPT_DIR/auto-bpf-ci.sh -U$EMAIL_ARG" /dev/null
