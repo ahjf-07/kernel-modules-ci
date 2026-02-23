@@ -151,8 +151,8 @@ generate_diff() {
     comm -13 <(sort "$ref") <(sort "$curr") > "$diff_new"
     comm -23 <(sort "$ref") <(sort "$curr") > "$diff_fixed"
     if [ "$cat" = "test" ]; then
-        (grep "^not ok" "$diff_new" > "${diff_new}.tmp" && mv "${diff_new}.tmp" "$diff_new") || true
-        (grep "^not ok" "$diff_fixed" > "${diff_fixed}.tmp" && mv "${diff_fixed}.tmp" "$diff_fixed") || true
+        (grep -E "^not ok" "$diff_new" | grep -vE "# *SKIP\b" > "${diff_new}.tmp" && mv "${diff_new}.tmp" "$diff_new") || true
+        (grep -E "^not ok" "$diff_fixed" | grep -vE "# *SKIP\b" > "${diff_fixed}.tmp" && mv "${diff_fixed}.tmp" "$diff_fixed") || true
     fi
 }
 
@@ -252,19 +252,22 @@ print_item() {
     echo "=========================================================="
     echo "   NET SELFTESTS SUMMARY"
     echo "=========================================================="
-    # 使用 xargs 去掉 wc 产生的多余空格
+    # Count by normalized TAP result lines and keep FAIL/SKIP mutually exclusive.
     TOTAL=$( [ -f "$RUN_DIR/list.test.txt" ] && wc -l < "$RUN_DIR/list.test.txt" | xargs || echo 0 )
-    FAIL=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -c "^not ok" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
-    SKIP=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -c "SKIP" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
+    SKIP=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -cE "# *SKIP\b" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
+    FAIL=$(  [ -f "$RUN_DIR/list.test.txt" ] && grep -cE "^not ok" "$RUN_DIR/list.test.txt" 2>/dev/null || true )
+    FAIL=$((FAIL - SKIP))
+    [ "$FAIL" -lt 0 ] && FAIL=0
     : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
     PASS=$((TOTAL - FAIL - SKIP))
+    [ "$PASS" -lt 0 ] && PASS=0
     printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" $PASS $TOTAL $SKIP $FAIL
 
     echo ""
     echo "=========================================================="
     echo "   TOP DETAILS (Max $TOP_N per category)"
     echo "=========================================================="
-    grep "^not ok" "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.failed.txt" || true
+    grep -E "^not ok" "$RUN_DIR/list.test.txt" | grep -vE "# *SKIP\b" > "$RUN_DIR/list.test.failed.txt" || true
     print_item "TEST"   "$RUN_DIR/list.test.failed.txt" 0 "TOP $TOP_N TEST FAILURES"
     print_item "SPARSE" "$RUN_DIR/list.sparse.txt"       0 "TOP $TOP_N SPARSE ISSUES"
     print_item "BUILD"  "$RUN_DIR/list.build.txt"        0 "TOP $TOP_N BUILD WARNINGS"
