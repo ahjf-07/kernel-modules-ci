@@ -195,7 +195,12 @@ count_unique_test_ids() {
     return
   }
   awk '
-    match($0, /^#([0-9]+)/, m) { ids[m[1]] = 1 }
+    $0 ~ /^#[0-9]+/ {
+      id = $0
+      sub(/^#/, "", id)
+      sub(/[^0-9].*$/, "", id)
+      ids[id] = 1
+    }
     END {
       c = 0
       for (id in ids) c++
@@ -210,10 +215,29 @@ count_unique_test_ids() {
   echo "   BPF SELFTESTS SUMMARY"
   echo "=========================================================="
   # Use the normalized test table as the single source of truth so summary matches TOP DETAILS.
-  TOTAL=$(count_unique_test_ids "$RUN_DIR/list.test.txt" | xargs 2>/dev/null || echo 0)
-  FAIL=$(count_unique_test_ids "$RUN_DIR/list.test.failed.txt" | xargs 2>/dev/null || echo 0)
-  SKIP=$(count_unique_test_ids "$RUN_DIR/list.test.skipped.txt" | xargs 2>/dev/null || echo 0)
+  # Keep FAIL/SKIP mutually exclusive by test-id (FAIL takes precedence over SKIP).
+  read -r TOTAL FAIL SKIP <<EOF
+$(awk '
+  $0 ~ /^#[0-9]+/ {
+    id = $0
+    sub(/^#/, "", id)
+    sub(/[^0-9].*$/, "", id)
+    total[id] = 1
+    if ($0 ~ /:(FAIL|ERROR)$/) fail[id] = 1
+    if ($0 ~ /:SKIP/) skip[id] = 1
+  }
+  END {
+    t = f = s = 0
+    for (id in total) t++
+    for (id in fail) f++
+    for (id in skip) if (!(id in fail)) s++
+    printf "%d %d %d\n", t, f, s
+  }
+' "$RUN_DIR/list.test.txt")
+EOF
+  : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
   PASS=$((TOTAL - FAIL - SKIP))
+  [ "$PASS" -lt 0 ] && PASS=0
   printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" "$PASS" "$TOTAL" "$SKIP" "$FAIL"
   echo "=========================================================="
 } > "$RUN_DIR/test.summ.txt" 2>&1 || echo "Summary failed" > "$RUN_DIR/test.summ.txt"
