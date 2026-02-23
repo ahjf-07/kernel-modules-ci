@@ -187,22 +187,34 @@ grep "^#" "$TEST_LOG" \
 grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:(FAIL|ERROR)$' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.failed.txt" || true
 grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:SKIP' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.skipped.txt" || true
 
+# Count unique top-level test IDs from table lines like "#19 ..." or "#19/7 ..."
+count_unique_test_ids() {
+  local file="$1"
+  [ -f "$file" ] || {
+    echo 0
+    return
+  }
+  awk '
+    match($0, /^#([0-9]+)/, m) { ids[m[1]] = 1 }
+    END {
+      c = 0
+      for (id in ids) c++
+      print c
+    }
+  ' "$file"
+}
+
 # --- BPF SELFTESTS SUMMARY (written to file, used by mail) ---
 {
   echo "=========================================================="
   echo "   BPF SELFTESTS SUMMARY"
   echo "=========================================================="
-  # Prefer test_progs Summary line if present
-  SUMM_LINE=$(grep "Summary: " "$TEST_LOG" | tail -n 1)
-  if [ -n "$SUMM_LINE" ]; then
-    echo "$SUMM_LINE"
-  else
-    TOTAL=$(wc -l < "$RUN_DIR/list.test.txt" | xargs 2>/dev/null || echo 0)
-    FAIL=$(wc -l < "$RUN_DIR/list.test.failed.txt" | xargs 2>/dev/null || echo 0)
-    SKIP=$(wc -l < "$RUN_DIR/list.test.skipped.txt" | xargs 2>/dev/null || echo 0)
-    PASS=$((TOTAL - FAIL - SKIP))
-    printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" "$PASS" "$TOTAL" "$SKIP" "$FAIL"
-  fi
+  # Use the normalized test table as the single source of truth so summary matches TOP DETAILS.
+  TOTAL=$(count_unique_test_ids "$RUN_DIR/list.test.txt" | xargs 2>/dev/null || echo 0)
+  FAIL=$(count_unique_test_ids "$RUN_DIR/list.test.failed.txt" | xargs 2>/dev/null || echo 0)
+  SKIP=$(count_unique_test_ids "$RUN_DIR/list.test.skipped.txt" | xargs 2>/dev/null || echo 0)
+  PASS=$((TOTAL - FAIL - SKIP))
+  printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" "$PASS" "$TOTAL" "$SKIP" "$FAIL"
   echo "=========================================================="
 } > "$RUN_DIR/test.summ.txt" 2>&1 || echo "Summary failed" > "$RUN_DIR/test.summ.txt"
 
