@@ -9,13 +9,7 @@ MEM="8G"
 SCOPE="ffast"
 
 # 宿主机注入目录：你已经建好并把 ip/tc/bridge/ss/nstat 都拷进去了
-# INJ_DIR: optional iproute2 injection dir (contains built ip/ss/tc etc.)
-# Priority:
-#   1) user-provided INJ_DIR (env) if exists
-#   2) $HOME/kernel-dev/iproute2/_inj if exists
-#   3) empty (no injection)
-: "${INJ_DIR:="$HOME/kernel-dev/iproute2/_inj"}"
-[ -d "$INJ_DIR" ] || INJ_DIR=""
+INJ_DIR="/home/u2404/kernel-dev/iproute2/_inj"
 
 usage() {
     cat <<EOF
@@ -49,12 +43,7 @@ done
 
 O_DIR_ABS=$(readlink -f "$O_DIR")
 INSTALL_DIR="$O_DIR_ABS/kselftest/kselftest_install"
-ARCH_UNAME="$(uname -m)"
-case "$ARCH_UNAME" in
-  aarch64|arm64) KERNEL_IMG="$O_DIR_ABS/arch/arm64/boot/Image" ;;
-  x86_64|amd64)  KERNEL_IMG="$O_DIR_ABS/arch/x86/boot/bzImage" ;;
-  *)             KERNEL_IMG="$O_DIR_ABS/vmlinux" ;;
-esac
+KERNEL_IMG="$O_DIR_ABS/arch/x86/boot/bzImage"
 
 # --- 基本检查 ---
 [ -f "$KERNEL_IMG" ] || { echo "ERROR: missing kernel image: $KERNEL_IMG" >&2; exit 2; }
@@ -151,45 +140,9 @@ echo "       injdir : $INJ_DIR"
 echo "       cpus/mem: $CPUS / $MEM"
 echo "       exec   : $EXEC_SH"
 
-ARCH_UNAME="$(uname -m)"
-VNG_RC=0
-
-if [ "$ARCH_UNAME" = "aarch64" ] || [ "$ARCH_UNAME" = "arm64" ]; then
-    # arm64: on some setups (e.g. Parallels), guest console doesn't go to stdout.
-    # Use --console/--console-client to capture guest output into $LOG_GUEST.
-    if [ -r /dev/vhost-vsock ] && [ -w /dev/vhost-vsock ]; then
-        CONSOLE_PORT=$(( (RANDOM % 10000) + 20000 ))
-        : > "$LOG_GUEST"
-        vng --run "$KERNEL_IMG" \
-            --config "$O_DIR_ABS/.config" \
-            --user root --rw --cpus "$CPUS" --memory "$MEM" \
-            --console "$CONSOLE_PORT" \
-            --exec "INJ_DIR='$INJ_DIR' INSTALL_DIR='$INSTALL_DIR' /bin/sh '$EXEC_SH'" &
-        VNG_PID=$!
-        vng --console-client "$CONSOLE_PORT" 2>&1 | tee -a "$LOG_GUEST" &
-        CON_PID=$!
-        wait "$VNG_PID"; VNG_RC=$?
-        kill "$CON_PID" 2>/dev/null || true
-        wait "$CON_PID" 2>/dev/null || true
-        [ -s "$LOG_GUEST" ] || { echo "ERROR: empty guest log (console not captured)"; exit 3; }
-    else
-        echo "[WARN] /dev/vhost-vsock not accessible; falling back to stdout capture (may be empty)" >&2
-        vng --run "$KERNEL_IMG" \
-            --config "$O_DIR_ABS/.config" \
-            --user root --rw --cpus "$CPUS" --memory "$MEM" \
-            --exec "INJ_DIR='$INJ_DIR' INSTALL_DIR='$INSTALL_DIR' /bin/sh '$EXEC_SH'" \
-            2>&1 | tee "$LOG_GUEST"
-        VNG_RC=${PIPESTATUS[0]}
-    fi
-else
-    # x86_64/others: keep existing behavior
-    vng --run "$KERNEL_IMG" \
-        --config "$O_DIR_ABS/.config" \
-        --user root --rw --cpus "$CPUS" --memory "$MEM" \
-        --exec "INJ_DIR='$INJ_DIR' INSTALL_DIR='$INSTALL_DIR' /bin/sh '$EXEC_SH'" \
-        2>&1 | tee "$LOG_GUEST"
-    VNG_RC=${PIPESTATUS[0]}
-fi
-
-exit "$VNG_RC"
+vng --run "$KERNEL_IMG" \
+    --config "$O_DIR_ABS/.config" \
+    --user root --rw --cpus "$CPUS" --memory "$MEM" \
+    --exec "INJ_DIR='$INJ_DIR' INSTALL_DIR='$INSTALL_DIR' /bin/sh '$EXEC_SH'" \
+    2>&1 | tee "$LOG_GUEST"
 

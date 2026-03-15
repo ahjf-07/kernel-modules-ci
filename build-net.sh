@@ -50,13 +50,7 @@ if [ "$SPARSE" -eq 1 ]; then
 fi
 
 echo "[build] Executing: $MAKE_CMD"
-ARCH_UNAME="$(uname -m)"
-case "$ARCH_UNAME" in
-  aarch64|arm64) BOOT_TARGET=Image ;;
-  x86_64|amd64)  BOOT_TARGET=bzImage ;;
-  *)             BOOT_TARGET=all ;;
-esac
-$MAKE_CMD "$BOOT_TARGET"
+$MAKE_CMD bzImage
 $MAKE_CMD modules
 
 # 4) 安装内核头文件（供 selftests 使用）

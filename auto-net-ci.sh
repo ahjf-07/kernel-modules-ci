@@ -272,13 +272,7 @@ print_item() {
 
     echo "== ARTIFACTS =="
     printf "  Run Dir  : %s\n" "$RUN_DIR"
-    ARCH_UNAME="$(uname -m)"
-case "$ARCH_UNAME" in
-  aarch64|arm64) KPRINT="$O_DIR/arch/arm64/boot/Image" ;;
-  x86_64|amd64)  KPRINT="$O_DIR/arch/x86/boot/bzImage" ;;
-  *)             KPRINT="$O_DIR/vmlinux" ;;
-esac
-printf "  Kernel   : %s\n" "$KPRINT"
+    printf "  Kernel   : %s\n" "$O_DIR/arch/x86/boot/bzImage"
     printf "  Config   : %s\n" "$O_DIR/.config"
     printf "  Logs     : %s\n" "$RUN_DIR/run-net.host.log, $RUN_DIR/build.all.log"
     printf "  Lists    : %s\n" "$RUN_DIR/list.{test,build,sparse}.txt"

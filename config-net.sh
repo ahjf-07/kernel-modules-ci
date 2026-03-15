@@ -30,13 +30,7 @@ esac
 
 
 # 1. 基础配置
-ARCH_UNAME="$(uname -m)"
-case "$ARCH_UNAME" in
-  aarch64|arm64) DEFCONFIG=defconfig ;;
-  x86_64|amd64)  DEFCONFIG=x86_64_defconfig ;;
-  *)             DEFCONFIG=defconfig ;;
-esac
-make O="$O_DIR" $LLVM_FLAG "$DEFCONFIG"
+make O="$O_DIR" $LLVM_FLAG x86_64_defconfig
 
 # 2. 物理追加所有核心依赖 (不留死角)
 cat <<EOF >> "$O_DIR/.config"
