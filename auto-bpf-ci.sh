@@ -368,4 +368,4 @@ update_state() {
 }
 [ "$RESET_B" -eq 1 ] || [ ! -d "$STATE_DIR/baseline" ] && update_state "$STATE_DIR/baseline"
 update_state "$STATE_DIR/prev"
-if [ -n "$TO_EMAIL" ]; then git send-email --to "${TO_EMAIL}" --confirm=never --8bit-encoding=UTF-8 "$MAIL_FILE"; else echo "[info] Report saved to $MAIL_FILE"; fi
+if [ -n "$TO_EMAIL" ]; then proxychains4 git send-email --to "${TO_EMAIL}" --confirm=never --8bit-encoding=UTF-8 "$MAIL_FILE"; else echo "[info] Report saved to $MAIL_FILE"; fi

@@ -303,5 +303,5 @@ if [ -s "$RUN_DIR/build.all.log" ]; then
 fi
 
 if [ -n "$TO_EMAIL" ]; then
-    git send-email --to "${TO_EMAIL}" --confirm=never --quiet "$MAIL_FILE" || echo "[WARN] Send failed"
+    proxychains4 git send-email --to "${TO_EMAIL}" --confirm=never --quiet "$MAIL_FILE" || echo "[WARN] Send failed"
 fi
