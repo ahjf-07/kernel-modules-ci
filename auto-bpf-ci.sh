@@ -187,65 +187,75 @@ grep "^#" "$TEST_LOG" \
 grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:(FAIL|ERROR)$' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.failed.txt" || true
 grep -E '^#[0-9]+(\/[0-9]+)?[[:space:]].*:SKIP' "$RUN_DIR/list.test.txt" > "$RUN_DIR/list.test.skipped.txt" || true
 
-# Count unique top-level test IDs from table lines like "#19 ..." or "#19/7 ..."
-count_unique_test_ids() {
-  local file="$1"
-  [ -f "$file" ] || {
-    echo 0
-    return
-  }
-  awk '
-    $0 ~ /^#[0-9]+/ {
-      id = $0
-      sub(/^#/, "", id)
-      sub(/[^0-9].*$/, "", id)
-      ids[id] = 1
-    }
-    END {
-      c = 0
-      for (id in ids) c++
-      print c
-    }
-  ' "$file"
-}
+# Preserve the summary emitted by test_progs. It reports successful top-level
+# tests/successful subtests, skipped events, and failed top-level tests.
+RUNNER_SUMMARY=$(
+  sed -E 's/^\[guest\][[:space:]]*//; s/[[:space:]]*$//' "$TEST_LOG" \
+    | grep -E '^Summary: [0-9]+/[0-9]+ PASSED, [0-9]+ SKIPPED( \([0-9]+ not built\))?, [0-9]+ FAILED$' \
+    | tail -n 1 || true
+)
 
 # --- BPF SELFTESTS SUMMARY (written to file, used by mail) ---
 {
   echo "=========================================================="
   echo "   BPF SELFTESTS SUMMARY"
   echo "=========================================================="
-  # Use the normalized test table as the single source of truth so summary matches TOP DETAILS.
-  # Keep FAIL/SKIP mutually exclusive by test-id (FAIL takes precedence over SKIP).
-  read -r TOTAL FAIL SKIP <<EOF
+  # Derive a conventional top-level summary from parent rows only. Subtest
+  # failures/skips stay in the detail lists but must not change parent status.
+  read -r TOTAL PASS SKIP FAIL OTHER <<EOF
 $(awk '
-  $0 ~ /^#[0-9]+/ {
-    id = $0
+  $0 ~ /^#[0-9]+[[:space:]]/ {
+    id = $1
     sub(/^#/, "", id)
-    sub(/[^0-9].*$/, "", id)
-    total[id] = 1
-    if ($0 ~ /:(FAIL|ERROR)$/) fail[id] = 1
-    if ($0 ~ /:SKIP/) skip[id] = 1
+    seen[id] = 1
+
+    if ($0 ~ /:(FAIL|ERROR)$/)
+      status[id] = "FAIL"
+    else if ($0 ~ /:SKIP([[:space:]]|$)/ && status[id] != "FAIL")
+      status[id] = "SKIP"
+    else if ($0 ~ /:OK([[:space:]]|$)/ && status[id] == "")
+      status[id] = "PASS"
   }
   END {
-    t = f = s = 0
-    for (id in total) t++
-    for (id in fail) f++
-    for (id in skip) if (!(id in fail)) s++
-    printf "%d %d %d\n", t, f, s
+    t = p = s = f = o = 0
+    for (id in seen) {
+      t++
+      if (status[id] == "PASS")
+        p++
+      else if (status[id] == "SKIP")
+        s++
+      else if (status[id] == "FAIL")
+        f++
+      else
+        o++
+    }
+    printf "%d %d %d %d %d\n", t, p, s, f, o
   }
 ' "$RUN_DIR/list.test.txt")
 EOF
-  : ${TOTAL:=0}; : ${FAIL:=0}; : ${SKIP:=0}
-  PASS=$((TOTAL - FAIL - SKIP))
-  [ "$PASS" -lt 0 ] && PASS=0
-  printf "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n" "$PASS" "$TOTAL" "$SKIP" "$FAIL"
+  : "${TOTAL:=0}"
+  : "${PASS:=0}"
+  : "${SKIP:=0}"
+  : "${FAIL:=0}"
+  : "${OTHER:=0}"
+
+  printf "Top-level: %d/%d PASSED, %d SKIPPED, %d FAILED\n" \
+         "$PASS" "$TOTAL" "$SKIP" "$FAIL"
+  if [ -n "$RUNNER_SUMMARY" ]; then
+    printf "Runner:    %s\n" "$RUNNER_SUMMARY"
+  else
+    echo "Runner:    (native summary not found)"
+  fi
+  if [ "$OTHER" -ne 0 ]; then
+    printf "WARNING: %d top-level result lines were not classified\n" "$OTHER"
+  fi
   echo "=========================================================="
 } > "$RUN_DIR/test.summ.txt" 2>&1 || echo "Summary failed" > "$RUN_DIR/test.summ.txt"
 
 # --- 7. 标准化函数 ---
 normalize_test() {
     sed 's/^\[guest\] //g' "$1" | grep -E "^#[0-9]+" | sed -E '
-        s/^[[:space:]]*//; s/^#[0-9]+(\/[0-9]+)? //; s/ \([0-9]+ms\)//g;
+        s/^[[:space:]]*//; s/^#[0-9]+(\/[0-9]+)?[[:space:]]+//; s/ \([0-9]+ms\)//g;
         s/pid [0-9]+/pid PID/g; s/veth[a-zA-Z0-9]+/veth-RANDOM/g; s/0x[0-9a-fA-F]{8,}/PTR/g;
         s/:[0-9]+:/:/g; s/\x1b\[[0-9;]*m//g; s/[[:space:]]*$//;
     ' | sort -u
@@ -261,7 +271,7 @@ report_diff_item() {
     echo ">>> $title:"
     if [ -f "$ref" ] && [ -f "$curr" ]; then
 	set +e
-        comm -13 <(sort "$ref") <(sort "$curr") > "$diff_file"
+        comm -13 <("$func" "$ref") <("$func" "$curr") > "$diff_file"
         rc=$?
         set -e
         # 允许 0 (无差异) 和 1 (有差异), 仅 2 (报错) 时退出
@@ -284,8 +294,8 @@ generate_report_section() {
     echo "##########################################################"
     echo "   REGRESSION REPORT vs $label_name"
     echo "##########################################################"
-    report_diff_item "$ref_dir/list.test.failed.txt"    "$RUN_DIR/list.test.failed.txt"    "[TEST] NEW FAILURES"           "cat"            "$label_slug" "test_failed"
-    report_diff_item "$ref_dir/list.test.skipped.txt"   "$RUN_DIR/list.test.skipped.txt"   "[TEST] NEW SKIPS"              "cat"            "$label_slug" "test_skipped"
+    report_diff_item "$ref_dir/list.test.failed.txt"    "$RUN_DIR/list.test.failed.txt"    "[TEST] NEW FAILURES"           "normalize_test"  "$label_slug" "test_failed"
+    report_diff_item "$ref_dir/list.test.skipped.txt"   "$RUN_DIR/list.test.skipped.txt"   "[TEST] NEW SKIPS"              "normalize_test"  "$label_slug" "test_skipped"
     report_diff_item "$ref_dir/list.build.error.txt"    "$RUN_DIR/list.build.error.txt"    "[BUILD] NEW COMPILER ERRORS"       "normalize_build" "$label_slug" "build_error"
     report_diff_item "$ref_dir/list.build.warning.txt"  "$RUN_DIR/list.build.warning.txt"  "[BUILD] NEW COMPILER WARNINGS"     "normalize_build" "$label_slug" "build_warning"
     report_diff_item "$ref_dir/list.sparse.txt"         "$RUN_DIR/list.sparse.txt"         "[SPARSE] NEW ISSUES (Effective)"   "normalize_build" "$label_slug" "sparse"
