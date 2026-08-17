@@ -256,8 +256,8 @@ EOF
 normalize_test() {
     sed 's/^\[guest\] //g' "$1" | grep -E "^#[0-9]+" | sed -E '
         s/^[[:space:]]*//; s/^#[0-9]+(\/[0-9]+)?[[:space:]]+//; s/ \([0-9]+ms\)//g;
-        s/pid [0-9]+/pid PID/g; s/veth[a-zA-Z0-9]+/veth-RANDOM/g; s/0x[0-9a-fA-F]{8,}/PTR/g;
-        s/:[0-9]+:/:/g; s/\x1b\[[0-9;]*m//g; s/[[:space:]]*$//;
+        s/pid [0-9]+/pid PID/g; s/veth[a-zA-Z0-9]+/veth-RANDOM/g;
+        s/\x1b\[[0-9;]*m//g; s/[[:space:]]*$//;
     ' | sort -u
 }
 normalize_build() {
